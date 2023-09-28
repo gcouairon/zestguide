@@ -1,0 +1,16 @@
+data_dir: '/datasets01/COCO/022719'
+lab_dir: '/datasets01/COCO-Stuff/072318'
+caption_dir: '/datasets01/COCO/022719/annotations'
+size: 1024
+model.__class__: src.zestguide_stblxl.ZestGuide
+# model.guidance_scale: 5
+model.loss: zestguide_utils.mse_loss2
+model.guidance_scale: 7.5
+model.num_inference_steps: 50
+model.concat_words_to_prompt: True
+model.eta: 0
+model.lr: 0.1
+model.ediffi_coeff: 0
+model.tau: 0.5
+model.ls: 0.2 # for label smooothing
+model.n_attention_maps: 20

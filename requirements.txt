@@ -1,0 +1,6 @@
+diffusers
+transformers
+scipy
+ftfy
+python-dotenv
+gradio
