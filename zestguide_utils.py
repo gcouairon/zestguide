@@ -118,4 +118,105 @@ def bce_loss2(att_maps, gts, scaler=5, ls=0.1, eps=1e-3):
     
     return bce_losses.mean() + norm_losses.mean()
         
+class AttentionHook2:
+    def __init__(self, unet, 
+                 ediffi_mask_32=0,
+                 ediffi_mask_64=0,
+                 ediffi_coeff=1,
+                 use_32_blocks=False):
+        self.__dict__.update(locals())
+        #self.att_modules = {
+            #'mid_block': unet.mid_block.attentions[0].transformer_blocks[0].attn2,
+        #'down_block1':unet.down_blocks[2].attentions[0].transformer_blocks[0].attn2,
+        # 'down_block2':unet.down_blocks[2].attentions[1].transformer_blocks[0].attn2,
+        #'up_block1':unet.up_blocks[1].attentions[0].transformer_blocks[0].attn2,
+        #'up_block2':unet.up_blocks[1].attentions[1].transformer_blocks[0].attn2,
+           #'up_block3': unet.up_blocks[1].attentions[2].transformer_blocks[0].attn2,   
+            
+#}
+        remove_modules = ['mid']#, 'down_blocks.1', 'up_blocks.1']
+        self.att_modules = {n:mod.attn2 for n, mod in unet.named_modules() if hasattr(mod, 'attn2')
+                           and not any(rm in n for rm in remove_modules)}
+                           
         
+        self.queries = {mod:None for mod in self.att_modules}
+        # remove hooks
+        for name, b in self.att_modules.items():
+            b._forward_hooks = OrderedDict()
+            
+            def hook(mod, input, output, name):
+                hidden_states = input[0]
+                # batch size should be one
+                query = mod.to_q(hidden_states)
+                #query = mod.reshape_heads_to_batch_dim(query)
+                inner_dim = query.shape[-1]
+                head_dim = inner_dim // mod.heads
+                batch_size = hidden_states.shape[0]
+                query = query.view(1, -1, mod.heads, head_dim).squeeze().transpose(1, 0)
+
+                self.queries[name] = query
+                
+                # return modified output: no
+            
+            b.register_forward_hook(partial(hook, name=name))
+            
+            # change attention (ediff)
+                
+            def processor(hidden_states, mod=None, hooker=None, **kwargs):
+                #new_att_mask = torch.zeros(8, query.shape[1], 77, device=query.device)
+                #mask = hooker.ediffi_mask_32 if hidden_states.shape[1] == 1024 else hooker.ediffi_mask_64
+                #del kwargs['attention_mask']
+                #kwargs['attention_mask'] = hooker.ediffi_coeff * mask[None]
+                #print('mask max', hidden_states.shape, mask.shape)
+                return mod.processor(mod, hidden_states, 
+                                     #attention_mask=hooker.ediffi_coeff * mask[None],
+                                     **kwargs)
+            
+            b.forward = partial(processor, mod=b, hooker=self)
+
+
+        
+    def set_text_embeddings(self, text_embeddings):
+        batch_size = text_embeddings.shape[0] # must be one
+        self.keys = {key:mod.to_k(text_embeddings)
+                for key, mod in self.att_modules.items()}
+        self.keys = {key: self.keys[key].view(1, -1, mod.heads, self.keys[key].shape[-1] // mod.heads).squeeze().transpose(1, 0) for key, mod in self.att_modules.items()}
+
+    def compute(self, l2_norm=False, grad_norm=False):
+        attention_scores_list = []
+
+        for mod_name, mod in self.att_modules.items():
+            key = self.keys[mod_name]
+            query = self.queries[mod_name]
+            if grad_norm:
+                key_norm = key.norm(dim=-1, keepdim=True)
+                key = key / (1e-4 + key_norm / key_norm.detach())
+                query_norm = query.norm(dim=-1, keepdim=True)
+                query = query / (1e-4 + query_norm / query_norm.detach())
+            elif l2_norm:
+                key_norm = key.norm(dim=-1, keepdim=True)
+                key = key / (1e-4 + key_norm / 10)
+                query_norm = query.norm(dim=-1, keepdim=True)
+                query = query / (1e-4 + query_norm / 10)               
+                
+                
+            attention_scores = torch.baddbmm(
+                torch.empty(query.shape[0], query.shape[1], key.shape[1], 
+                    dtype=query.dtype, device=query.device),
+                query, key.transpose(-1, -2), beta=0, alpha=mod.scale)
+            #attention_probs = attention_scores.softmax(dim=-1)
+            #nheads x ntok_img x nwords
+            # resize to dim 32:
+
+
+            attention_scores = attention_scores.permute(0, 2, 1)
+
+            sq = int(attention_scores.shape[-1]**.5)
+            if sq==64:
+                rescale = nn.AvgPool2d(kernel_size=2, stride=2)
+                #rescale = T.Resize(64)
+                attention_scores = rescale(attention_scores.reshape(mod.heads, -1, sq, sq)).flatten(-2)
+
+            attention_scores_list.append(attention_scores)
+
+        return torch.cat(attention_scores_list)
