@@ -11,7 +11,7 @@ def submit(f,
            slurm_partition='learnlab',
            ngpus=2,
            **kwargs):
-    #function to parrallelize f
+    #function to parallelize f
     logs_folder = Path(output).joinpath('sblogs')
     logs_folder.mkdir(exist_ok=True)
     aex = submitit.AutoExecutor(folder=str(logs_folder))
