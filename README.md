@@ -21,8 +21,8 @@ from functools import partial
 from zestguide_utils import mse_loss2
 import torch
 
-from gradpaint_pipeline import StableDiffusionXLGradpaintPipeline
-inpaint_pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
+from zestguide_pipeline import ZestGuidePipeline
+inpaint_pipe = ZestGuidePipeline.from_pretrained(
     "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16)
 
 gen = torch.Generator()
